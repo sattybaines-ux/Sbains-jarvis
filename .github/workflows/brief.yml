@@ -22,6 +22,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       BRIEF_PASSPHRASE: ${{ secrets.BRIEF_PASSPHRASE }}
       MS_CLIENT_ID: ${{ vars.MS_CLIENT_ID }}
@@ -40,12 +41,15 @@ jobs:
       TIMEZONE: ${{ vars.TIMEZONE }}
       USER_NAME: ${{ vars.USER_NAME }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
+      - name: Install Claude Code (runs Claude on your subscription)
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
+        run: npm install -g @anthropic-ai/claude-code
 
       - name: Build the brief
         run: python -m agent.main
@@ -58,7 +62,7 @@ jobs:
           if [ -n "$GH_TOKEN" ]; then gh secret set MS_REFRESH_TOKEN < out/ms_refresh_token; fi
 
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: site
       - id: deploy
