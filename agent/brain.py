@@ -136,7 +136,7 @@ class Brain:
     def brief(self, facts: dict) -> list[str]:
         n = 5 + min(3, max(1, len(facts.get("top3", []))))  # 6-8 lines
         system = BRIEF_TASK.format(name=self.name, profile=self.profile, n_lines=n, final=FINAL_LINE)
-        lines = [l.strip() for l in self._parse(system, facts, Brief, effort="medium").lines if l.strip()]
+        lines = [l.strip() for l in self._parse(system, facts, Brief, effort="low").lines if l.strip()]
         if not lines or lines[-1] != FINAL_LINE:
             lines = [l for l in lines if l != FINAL_LINE] + [FINAL_LINE]
         return lines

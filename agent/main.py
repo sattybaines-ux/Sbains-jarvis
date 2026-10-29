@@ -6,6 +6,8 @@ Run:  python -m agent.main            (real run; needs the secrets in README)
 import base64
 import json
 import sys
+import time as clock
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta
 
 from . import calendar_math
@@ -19,6 +21,11 @@ def plain_error(e: Exception) -> str:
 
 
 def run(cfg: Config, demo: bool = False) -> dict:
+    started = clock.monotonic()
+
+    def timer(phase: str) -> None:  # timings only; logs are public
+        print(f"[{clock.monotonic() - started:5.1f}s] {phase}")
+
     tz = cfg.timezone
     now = datetime.now(tz)
     day_start = datetime.combine(now.date(), time.min, tz)
@@ -41,8 +48,12 @@ def run(cfg: Config, demo: bool = False) -> dict:
         for k in ("outlook_cal", "google_cal", "outlook_mail", "gmail", "notion"):
             led.set(k, "online", "Demo data.")
     else:
-        # ---- Microsoft 365 --------------------------------------------------
-        if cfg.ms_refresh_token and cfg.ms_client_id:
+        # The three accounts are fetched at the same time; each one only touches its own ledger rows.
+        def microsoft():
+            if not (cfg.ms_refresh_token and cfg.ms_client_id):
+                for k in ("outlook_cal", "outlook_mail"):
+                    led.set(k, "offline", "Not connected (no MS_REFRESH_TOKEN).")
+                return
             try:
                 from .sources.outlook import Outlook
                 ms = clients["Outlook"] = Outlook(cfg.ms_client_id, cfg.ms_tenant, cfg.ms_refresh_token)
@@ -53,18 +64,18 @@ def run(cfg: Config, demo: bool = False) -> dict:
                 n = gather(led, "outlook_mail", lambda: ms.inbox(now - timedelta(hours=24)), emails, "emails in 24h")
                 if n is not None:
                     try:
-                        followups += ms.unanswered_sent(now)
+                        followups.extend(ms.unanswered_sent(now))
                     except Exception as e:
                         print("outlook follow-ups skipped:", plain_error(e))
             except Exception as e:
                 for k in ("outlook_cal", "outlook_mail"):
                     led.set(k, "offline", plain_error(e))
-        else:
-            for k in ("outlook_cal", "outlook_mail"):
-                led.set(k, "offline", "Not connected (no MS_REFRESH_TOKEN).")
 
-        # ---- Google ---------------------------------------------------------
-        if cfg.google_refresh_token:
+        def google():
+            if not cfg.google_refresh_token:
+                for k in ("google_cal", "gmail"):
+                    led.set(k, "offline", "Not connected (no GOOGLE_REFRESH_TOKEN).")
+                return
             try:
                 from .sources.google import Google
                 g = clients["Gmail"] = Google(cfg.google_client_id, cfg.google_client_secret, cfg.google_refresh_token)
@@ -72,28 +83,32 @@ def run(cfg: Config, demo: bool = False) -> dict:
                 n = gather(led, "gmail", lambda: g.inbox(now - timedelta(hours=24)), emails, "emails in 24h")
                 if n is not None:
                     try:
-                        followups += g.unanswered_sent(now)
+                        followups.extend(g.unanswered_sent(now))
                     except Exception as e:
                         print("gmail follow-ups skipped:", plain_error(e))
             except Exception as e:
                 for k in ("google_cal", "gmail"):
                     led.set(k, "offline", plain_error(e))
-        else:
-            for k in ("google_cal", "gmail"):
-                led.set(k, "offline", "Not connected (no GOOGLE_REFRESH_TOKEN).")
 
-        # ---- Notion ---------------------------------------------------------
-        if cfg.notion_token:
+        def notion():
+            if not cfg.notion_token:
+                led.set("notion", "offline", "Not connected (no NOTION_TOKEN).")
+                return
             try:
                 from .sources.notion import Notion
-                notion = clients["Notion"] = Notion(cfg.notion_token)
-                tasks, notes = notion.tasks_and_notes()
-                led.set("notion", "online" if tasks or notes else "empty",
-                        f"{len(tasks)} open tasks, {len(notes)} priority pages read.")
+                n = clients["Notion"] = Notion(cfg.notion_token)
+                t, pages = n.tasks_and_notes()
+                tasks.extend(t)
+                notes.extend(pages)
+                led.set("notion", "online" if t or pages else "empty",
+                        f"{len(t)} open tasks, {len(pages)} priority pages read.")
             except Exception as e:
                 led.set("notion", "offline", plain_error(e))
-        else:
-            led.set("notion", "offline", "Not connected (no NOTION_TOKEN).")
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            for f in [pool.submit(fn) for fn in (microsoft, google, notion)]:
+                f.result()
+    timer("gather accounts")
 
     # ---- calendar math (deterministic) ---------------------------------------
     events = calendar_math.localize(events, tz)
@@ -127,6 +142,7 @@ def run(cfg: Config, demo: bool = False) -> dict:
         from .brain import Brain
         brain = Brain(cfg.model, cfg.user_name, cfg.profile)
         tri = brain.triage(today_label, data)
+    timer("Claude: triage")
 
     by_id = {e["id"]: e for e in emails}
     groups = {"needs_reply": 0, "fyi": 0, "ignore": 0}
@@ -155,6 +171,7 @@ def run(cfg: Config, demo: bool = False) -> dict:
         drafts.append({"label": label, "source": mail["source"], "created": ok, "text": call.draft_reply})
 
     prep_ids = set(tri.needs_prep_event_ids)
+    timer("save drafts")
     numbers = {
         "meetingsToday": len([e for e in events if not e["all_day"]]) if cal_online else None,
         "needsPrep": len([e for e in events if e["id"] in prep_ids]) if cal_online else None,
@@ -191,6 +208,7 @@ def run(cfg: Config, demo: bool = False) -> dict:
         lines = fake_brief(facts)
     else:
         lines = brain.brief(facts)
+    timer("Claude: spoken brief")
     brief_text = "\n".join(lines)
 
     # ---- voice ---------------------------------------------------------------
@@ -205,6 +223,8 @@ def run(cfg: Config, demo: bool = False) -> dict:
     else:
         led.set("voice", "offline", "Not connected (no FISH_AUDIO_API_KEY)." if not demo else "Demo: no audio.")
 
+    timer("voice")
+
     # ---- Notion brief page ---------------------------------------------------
     if "Notion" in clients:
         try:
@@ -215,6 +235,8 @@ def run(cfg: Config, demo: bool = False) -> dict:
             led.set("notion_page", "offline", plain_error(e))
     else:
         led.set("notion_page", "offline", "Notion not connected.")
+
+    timer("Notion brief page")
 
     # ---- publish + push ------------------------------------------------------
     payload = {
