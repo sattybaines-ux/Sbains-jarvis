@@ -27,6 +27,12 @@
   header { display: flex; justify-content: space-between; align-items: flex-end; margin: 8px 2px 16px; }
   h1 { font-size: 30px; letter-spacing: -0.02em; margin: 0; }
   .sub { color: var(--muted); font-size: 14px; }
+  .hdr-right { display: flex; align-items: center; gap: 10px; }
+  .refresh { width: 40px; height: 40px; padding: 0; border-radius: 50%; font-size: 20px; line-height: 40px;
+             background: var(--card); color: var(--accent); border: 1px solid var(--line); }
+  .refresh.spin { animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .stale { color: var(--warn); }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin-bottom: 12px; }
   .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
   .brief p { margin: 0 0 8px; font-size: 17px; }
@@ -61,7 +67,10 @@
 <main>
   <header>
     <div><div class="sub" id="date">Morning brief</div><h1>Jarvis</h1></div>
-    <div class="sub" id="updated"></div>
+    <div class="hdr-right">
+      <div class="sub" id="updated"></div>
+      <button id="refresh" class="refresh" aria-label="Refresh brief">↻</button>
+    </div>
   </header>
 
   <section id="lock" class="card hidden">

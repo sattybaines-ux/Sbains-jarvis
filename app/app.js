@@ -8,6 +8,8 @@ const store = {
 };
 const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
+let lastCt = null;  // ciphertext of the brief on screen, to skip re-rendering the same one
+
 async function decrypt(box, passphrase) {
   const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]);
   const key = await crypto.subtle.deriveKey(
@@ -26,7 +28,10 @@ function el(tag, text, cls) {
 
 function render(d) {
   $("date").textContent = d.dateLabel;
-  $("updated").textContent = "Updated " + new Date(d.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const made = new Date(d.generatedAt), today = new Date().toDateString() === made.toDateString();
+  $("updated").textContent = (today ? "Today " : made.toLocaleDateString([], { weekday: "short" }) + " ") +
+    made.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  $("updated").classList.toggle("stale", !today);
 
   $("brief").replaceChildren(...d.brief.map((l) => el("p", l)));
   if (d.audio) {
@@ -75,17 +80,27 @@ function render(d) {
 async function load() {
   const pass = store.get();
   if (!pass) { $("lock").classList.remove("hidden"); return; }
+  $("refresh").classList.add("spin");
   try {
-    const r = await fetch("data/latest.json?t=" + Date.now());
+    const r = await fetch("data/latest.json?t=" + Date.now(), { cache: "no-store" });
     if (!r.ok) throw new Error("No brief published yet.");
-    render(await decrypt(await r.json(), pass));
+    const box = await r.json();
+    if (box.ct !== lastCt) { render(await decrypt(box, pass)); lastCt = box.ct; }
   } catch (e) {
     const wrongPass = e.name === "OperationError";
     if (wrongPass) store.clear();
-    $("lockErr").textContent = wrongPass ? "That passphrase didn't work." : e.message;
-    $("lock").classList.remove("hidden");
+    if (wrongPass || lastCt === null) {
+      $("lockErr").textContent = wrongPass ? "That passphrase didn't work." : e.message;
+      $("lock").classList.remove("hidden");
+    }
+  } finally {
+    $("refresh").classList.remove("spin");
   }
 }
+
+$("refresh").onclick = load;
+// iPhone keeps home-screen apps in memory; reload whenever Jarvis comes back on screen.
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") load(); });
 
 $("unlock").onclick = () => { store.set($("pass").value); $("lockErr").textContent = ""; load(); };
 $("pass").onkeydown = (e) => { if (e.key === "Enter") $("unlock").click(); };

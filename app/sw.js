@@ -1,5 +1,5 @@
 // Service worker: offline shell + push notifications.
-const SHELL = "jarvis-shell-v1";
+const SHELL = "jarvis-shell-v2";
 const FILES = ["./", "index.html", "app.js", "config.js", "manifest.webmanifest", "icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {
@@ -16,7 +16,7 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
   // Network first so new briefs and app updates show up; cached copy when offline.
   e.respondWith(
-    fetch(e.request).then((r) => {
+    fetch(e.request, { cache: "no-store" }).then((r) => {
       const copy = r.clone();
       caches.open(SHELL).then((c) => c.put(e.request.url.split("?")[0], copy));
       return r;
