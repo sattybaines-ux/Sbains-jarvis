@@ -23,18 +23,37 @@ class Google:
         self.gm = build("gmail", "v1", credentials=creds, cache_discovery=False)
 
     # ---- calendar -------------------------------------------------------
+    def calendars(self) -> list[dict]:
+        """The calendars shown in Satty's Google Calendar (ticked in the sidebar), primary first."""
+        items, token = [], None
+        while True:
+            res = self.cal.calendarList().list(pageToken=token, minAccessRole="reader").execute()
+            items += res.get("items", [])
+            token = res.get("nextPageToken")
+            if not token:
+                break
+        shown = [c for c in items if c.get("selected") or c.get("primary")]
+        return sorted(shown, key=lambda c: not c.get("primary"))
+
     def events(self, start: datetime, end: datetime) -> list[dict]:
-        rows = self.cal.events().list(
-            calendarId="primary", timeMin=start.isoformat(), timeMax=end.isoformat(),
-            singleEvents=True, orderBy="startTime", maxResults=100).execute().get("items", [])
-        out = []
-        for e in rows:
-            if e.get("status") == "cancelled":
+        rows = []
+        for cal in self.calendars():
+            res = self.cal.events().list(
+                calendarId=cal["id"], timeMin=start.isoformat(), timeMax=end.isoformat(),
+                singleEvents=True, orderBy="startTime", maxResults=100).execute()
+            rows += [(cal, e) for e in res.get("items", [])]
+        out, seen = [], set()
+        for cal, e in rows:
+            # The same meeting can sit on several calendars; keep it once.
+            key = e.get("iCalUID") or e["id"]
+            if e.get("status") == "cancelled" or key in seen:
                 continue
+            seen.add(key)
             all_day = "date" in e["start"]
             out.append({
                 "id": "g:" + e["id"],
                 "source": "Google",
+                "calendar": cal.get("summaryOverride") or cal.get("summary", ""),
                 "title": e.get("summary") or "(no title)",
                 "start": e["start"].get("dateTime") or e["start"]["date"],
                 "end": e["end"].get("dateTime") or e["end"]["date"],
