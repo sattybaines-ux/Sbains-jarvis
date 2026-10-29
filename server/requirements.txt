@@ -1,0 +1,5 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+claude-agent-sdk>=0.2.174
+faster-whisper>=1.2

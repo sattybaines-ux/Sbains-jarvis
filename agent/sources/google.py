@@ -102,10 +102,32 @@ class Google:
                             "preview": m.get("snippet", "")[:300]})
         return out
 
-    def create_reply_draft(self, message_id: str, text: str) -> None:
+    def search(self, query: str, limit: int = 10) -> list[dict]:
+        out = []
+        for mid in self._list_ids(query, cap=limit):
+            m = self.gm.users().messages().get(userId="me", id=mid, format="metadata",
+                                               metadataHeaders=["From", "Subject"]).execute()
+            h = _headers(m)
+            out.append({"id": "g:" + mid, "source": "Gmail", "from": h.get("from", ""), "subject": h.get("subject", ""),
+                        "received": datetime.fromtimestamp(int(m["internalDate"]) / 1000, timezone.utc).isoformat(),
+                        "preview": m.get("snippet", "")[:300]})
+        return out
+
+    def read(self, message_id: str) -> dict:
+        m = self.gm.users().messages().get(userId="me", id=message_id, format="full").execute()
+        h = _headers(m)
+        return {"from": h.get("from", ""), "to": h.get("to", ""), "cc": h.get("cc", ""), "subject": h.get("subject", ""),
+                "received": datetime.fromtimestamp(int(m["internalDate"]) / 1000, timezone.utc).isoformat(),
+                "body": _clip(_plain_text(m["payload"]) or m.get("snippet", ""))}
+
+    def create_reply_draft(self, message_id: str, text: str) -> bool:
+        """Saves a reply draft in the thread. Returns False if that thread already has a draft."""
         m = self.gm.users().messages().get(
             userId="me", id=message_id, format="metadata",
             metadataHeaders=["From", "Reply-To", "Subject", "Message-ID", "References"]).execute()
+        thread = self.gm.users().threads().get(userId="me", id=m["threadId"], format="minimal").execute()
+        if any("DRAFT" in x.get("labelIds", []) for x in thread.get("messages", [])):
+            return False
         h = _headers(m)
         msg = EmailMessage()
         msg["To"] = h.get("reply-to") or h.get("from", "")
@@ -118,6 +140,7 @@ class Google:
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         self.gm.users().drafts().create(
             userId="me", body={"message": {"raw": raw, "threadId": m["threadId"]}}).execute()
+        return True
 
 
 def _headers(m: dict) -> dict:

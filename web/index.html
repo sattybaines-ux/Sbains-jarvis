@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jarvis</title>
+<meta name="description" content="Satty's personal assistant">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Jarvis">
+<meta name="theme-color" content="#0d1017">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2.5"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V20h-5v-6H9v6H4z"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></symbol>
+</svg>
+
+<main>
+  <!-- sign in -->
+  <section id="lock" class="lock hidden">
+    <div>
+      <div class="orb" aria-hidden="true"></div>
+      <div class="eyebrow">Private assistant</div>
+      <h1 class="greet">Jarvis</h1>
+      <input id="pass" class="field" type="password" placeholder="Passphrase" autocomplete="current-password" enterkeyhint="go">
+      <button id="unlock" class="btn primary" style="width:100%">Unlock</button>
+      <p id="lockErr" class="err"></p>
+    </div>
+  </section>
+
+  <!-- home -->
+  <section id="home" class="view hidden">
+    <div class="top">
+      <div>
+        <div class="eyebrow" id="today"></div>
+        <h1 class="greet" id="greet"></h1>
+      </div>
+      <div>
+        <button id="refresh" class="icon-btn" aria-label="Refresh brief"><svg><use href="#i-refresh"/></svg></button>
+        <div class="stamp" id="stamp"></div>
+      </div>
+    </div>
+
+    <div class="orb-wrap">
+      <button class="orb" id="orb" data-state="idle" aria-label="Talk to Jarvis"><span class="glyph"><svg><use href="#i-mic"/></svg></span></button>
+      <div class="orb-hint" id="hint">Tap to talk</div>
+    </div>
+
+    <div class="chips" id="chips"></div>
+
+    <article class="card brief" id="briefCard">
+      <div class="card-h"><h2>Your brief</h2><span class="meta" id="briefMeta"></span></div>
+      <div id="brief"></div>
+      <button class="play" id="playBrief"><svg width="14" height="14"><use href="#i-play"/></svg> Read it to me</button>
+    </article>
+
+    <article class="card">
+      <div class="card-h"><h2>At a glance</h2></div>
+      <div class="stats" id="stats"></div>
+    </article>
+
+    <article class="card">
+      <div class="card-h"><h2>What matters</h2><span class="meta">Top 3</span></div>
+      <ol class="top3" id="top3"></ol>
+      <div class="know" id="know"></div>
+    </article>
+
+    <article class="card">
+      <div class="card-h"><h2>Today</h2><span class="meta" id="schedMeta"></span></div>
+      <div class="timeline" id="timeline"></div>
+    </article>
+
+    <article class="card">
+      <div class="card-h"><h2>Drafts waiting</h2><span class="meta">Review &amp; send</span></div>
+      <ul class="drafts" id="drafts"></ul>
+    </article>
+
+    <article class="card">
+      <div class="card-h"><h2>Sources</h2></div>
+      <div class="sources" id="sources"></div>
+    </article>
+  </section>
+
+  <!-- conversation -->
+  <section id="chat" class="view hidden">
+    <div class="top">
+      <div><div class="eyebrow">Conversation</div><h1 class="greet">Ask <em>anything</em></h1></div>
+      <button id="newChat" class="icon-btn" aria-label="New conversation"><svg><use href="#i-refresh"/></svg></button>
+    </div>
+    <div class="chat" id="messages"></div>
+    <div style="height:90px"></div>
+  </section>
+
+  <!-- settings -->
+  <section id="settings" class="view hidden">
+    <div class="top"><div><div class="eyebrow">Jarvis</div><h1 class="greet">Settings</h1></div></div>
+    <article class="card">
+      <div class="setting"><div>Morning notification<small id="notifyState">Get a ping when your brief is ready.</small></div><button class="toggle" id="notify">Turn on</button></div>
+      <div class="setting"><div>Speak replies<small>Jarvis answers out loud when you talk to it.</small></div><button class="toggle" id="speakToggle"></button></div>
+      <div class="setting"><div>Appearance<small>Follow your phone, or pick one.</small></div><button class="toggle" id="theme"></button></div>
+      <div class="setting"><div>Connected<small id="connected"></small></div></div>
+    </article>
+  </section>
+</main>
+
+<div class="composer hidden" id="composer">
+  <form id="ask">
+    <input id="askInput" placeholder="Message Jarvis" autocomplete="off" enterkeyhint="send">
+    <button type="button" class="send" id="askMic" aria-label="Speak" style="background:var(--card);color:var(--ink);border:1px solid var(--line)"><svg><use href="#i-mic"/></svg></button>
+    <button class="send" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+  </form>
+</div>
+
+<div class="tabs hidden" id="tabs">
+  <nav>
+    <button class="tab" data-view="home" aria-selected="true"><svg><use href="#i-home"/></svg>Today</button>
+    <button class="tab" data-view="chat"><svg><use href="#i-chat"/></svg>Ask</button>
+    <button class="tab" data-view="settings"><svg><use href="#i-gear"/></svg>Settings</button>
+  </nav>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -33,18 +33,18 @@ Inbox: put every email in exactly one group:
 - ignore: newsletters, automated notifications, marketing.
 For each needs_reply email that is not handle_yourself, write draft_reply: 2-4 sentences, warm and direct, no filler, signed "{sign}". If the reply needs a fact {name} hasn't given (a date, number, yes/no decision), write a bracketed placeholder like "[confirm Thursday?]" - never guess it.
 
-Top 3: the three things that matter most today, ranked. Weigh in order: hard deadlines today/tomorrow, someone blocked on {name}, meeting prep, standing priority rank. One-line why each. If Notion is offline, use only the standing priorities and don't invent tasks.
+Top 3: the three things that matter most for the rest of today, ranked (time_of_day and now_local tell you how much of the day is left; events marked past are done). Weigh in order: hard deadlines today/tomorrow, someone blocked on {name}, meeting prep, standing priority rank. One-line why each. If Notion is offline, use only the standing priorities and don't invent tasks.
 
 One thing to know: one real signal from the data (approaching deadline, a follow-up {name} sent that nobody answered, a conflict that will bite). If nothing qualifies, exactly "Nothing urgent stands out."
 """
 
 BRIEF_TASK = """\
-You are Jarvis, {name}'s chief of staff. Write the morning brief to be spoken aloud, from the FACTS below only.
+You are Jarvis, {name}'s chief of staff. Write the brief to be spoken aloud, from the FACTS below only. It may be morning, afternoon or evening; match the greeting to the time.
 
 {profile}
 
 Exactly {n_lines} short lines, Jarvis talking to {name} ("you"), warm and direct, no filler, no bullet symbols, no markdown, each line short enough to say in one breath. Order:
-1. Greeting with the day and date, plus the shape of the day in one breath.
+1. Greeting for the time of day ("Morning", "Afternoon", "Evening") with the day and date, plus the shape of what's left of the day in one breath.
 2. Calendar: what needs prep, any conflict, the best focus gap.
 3. Inbox: counts per group and how many drafts are waiting for approval.
 Then the top 3, one line each, ranked, with the why.
@@ -77,6 +77,19 @@ class Triage(BaseModel):
 
 class Brief(BaseModel):
     lines: list[str]
+
+
+class QuickBrief(Triage):
+    lines: list[str] = Field(description="The spoken brief, 6-8 lines, last line exactly the final question.")
+
+
+QUICK_EXTRA = """
+Then also write `lines`: the brief to be spoken aloud right now, 6-8 short lines, Jarvis talking to {name} ("you"),
+warm and direct, no bullets or markdown. Greet for the time of day (morning / afternoon / evening), cover only what's
+still ahead today (skip past events), the inbox counts per group (say replies are drafted only for needs_reply emails
+you wrote a draft_reply for), the top 3, the one thing to know, and end exactly with: {final}
+If a source is offline or empty, say so plainly.
+"""
 
 
 class Brain:
@@ -132,6 +145,14 @@ class Brain:
         system = TRIAGE_TASK.format(name=self.name, sign=self.name, today=today, profile=self.profile,
                                     rules=RULES.format(name=self.name))
         return self._parse(system, data, Triage, effort="high")
+
+    def quick(self, today: str, data: dict) -> tuple[Triage, list[str]]:
+        """Triage and the spoken brief in one fast call, for the refresh button."""
+        system = TRIAGE_TASK.format(name=self.name, sign=self.name, today=today, profile=self.profile,
+                                    rules=RULES.format(name=self.name)) + QUICK_EXTRA.format(name=self.name, final=FINAL_LINE)
+        out = self._parse(system, data, QuickBrief, effort="low")
+        lines = [l.strip() for l in out.lines if l.strip() and l.strip() != FINAL_LINE] + [FINAL_LINE]
+        return Triage(**out.model_dump(exclude={"lines"})), lines
 
     def brief(self, facts: dict) -> list[str]:
         n = 5 + min(3, max(1, len(facts.get("top3", []))))  # 6-8 lines

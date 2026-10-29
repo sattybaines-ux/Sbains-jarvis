@@ -62,7 +62,7 @@ function render(d) {
   $("schedule").replaceChildren(...sched);
 
   $("drafts").replaceChildren(...(d.drafts.length ? d.drafts.map((x) => {
-    const li = el("li", x.label); li.append(el("small", x.created ? `Draft saved in ${x.source}` : "Not drafted")); return li;
+    const li = el("li", x.label); li.append(el("small", x.alreadyWaiting ? `Draft already waiting in ${x.source}` : x.created ? `Draft saved in ${x.source}` : "Not drafted")); return li;
   }) : [el("li", "None.")]));
 
   $("suspiciousCard").classList.toggle("hidden", !d.suspicious.length);

@@ -20,7 +20,9 @@ def plain_error(e: Exception) -> str:
     return (str(e) or type(e).__name__).splitlines()[0][:200]
 
 
-def run(cfg: Config, demo: bool = False) -> dict:
+def run(cfg: Config, demo: bool = False, publish: bool = True, quick: bool = False) -> dict:
+    """publish: write the encrypted GitHub Pages site. quick: the fast refresh used by the Jarvis server
+    (one Claude call, no follow-up scan, no voice or Notion archive page)."""
     started = clock.monotonic()
 
     def timer(phase: str) -> None:  # timings only; logs are public
@@ -50,19 +52,12 @@ def run(cfg: Config, demo: bool = False) -> dict:
     else:
         # The three accounts are fetched at the same time; each one only touches its own ledger rows.
         def microsoft():
-            if not (cfg.ms_refresh_token and cfg.ms_client_id):
-                for k in ("outlook_cal", "outlook_mail"):
-                    led.set(k, "offline", "Not connected (no MS_REFRESH_TOKEN).")
-                return
             try:
-                from .sources.outlook import Outlook
-                ms = clients["Outlook"] = Outlook(cfg.ms_client_id, cfg.ms_tenant, cfg.ms_refresh_token)
-                if ms.new_refresh_token:
-                    cfg.out_dir.mkdir(exist_ok=True)
-                    (cfg.out_dir / "ms_refresh_token").write_text(ms.new_refresh_token)
+                from .sources.outlook import connect
+                ms = clients["Outlook"] = connect(cfg)
                 gather(led, "outlook_cal", lambda: ms.events(day_start, tomorrow_noon), events, "events")
                 n = gather(led, "outlook_mail", lambda: ms.inbox(now - timedelta(hours=24)), emails, "emails in 24h")
-                if n is not None:
+                if n is not None and not quick:
                     try:
                         followups.extend(ms.unanswered_sent(now))
                     except Exception as e:
@@ -81,7 +76,7 @@ def run(cfg: Config, demo: bool = False) -> dict:
                 g = clients["Gmail"] = Google(cfg.google_client_id, cfg.google_client_secret, cfg.google_refresh_token)
                 gather(led, "google_cal", lambda: g.events(day_start, tomorrow_noon), events, "events")
                 n = gather(led, "gmail", lambda: g.inbox(now - timedelta(hours=24)), emails, "emails in 24h")
-                if n is not None:
+                if n is not None and not quick:
                     try:
                         followups.extend(g.unanswered_sent(now))
                     except Exception as e:
@@ -112,6 +107,8 @@ def run(cfg: Config, demo: bool = False) -> dict:
 
     # ---- calendar math (deterministic) ---------------------------------------
     events = calendar_math.localize(events, tz)
+    for e in events:
+        e["past"] = not e["all_day"] and e["end_local"] <= now.isoformat(timespec="minutes")
     today_iso = now.date().isoformat()
     tomorrow = [e for e in events if e["start_local"][:10] > today_iso]
     events = [e for e in events if e["start_local"][:10] <= today_iso and e["end_local"][:10] >= today_iso]
@@ -123,6 +120,7 @@ def run(cfg: Config, demo: bool = False) -> dict:
     data = {
         "today": today_label,
         "now_local": now.isoformat(timespec="minutes"),
+        "time_of_day": part_of_day(now),
         "source_status": led.as_dict(),
         "calendar_today": events,
         "calendar_tomorrow_morning": tomorrow,
@@ -135,13 +133,17 @@ def run(cfg: Config, demo: bool = False) -> dict:
     }
 
     # ---- Claude: triage ------------------------------------------------------
+    quick_lines = None
     if demo:
         from .demo import fake_triage
         tri = fake_triage(events, emails)
     else:
         from .brain import Brain
         brain = Brain(cfg.model, cfg.user_name, cfg.profile)
-        tri = brain.triage(today_label, data)
+        if quick:
+            tri, quick_lines = brain.quick(today_label, data)
+        else:
+            tri = brain.triage(today_label, data)
     timer("Claude: triage")
 
     by_id = {e["id"]: e for e in emails}
@@ -161,14 +163,16 @@ def run(cfg: Config, demo: bool = False) -> dict:
         if call.handle_yourself or not call.draft_reply:
             drafts.append({"label": label + " (handle yourself)", "source": mail["source"], "created": False})
             continue
-        ok = True
+        ok, new = True, True
         if not demo:
             try:
-                clients[mail["source"]].create_reply_draft(call.id[2:], call.draft_reply)
+                # False = a draft from an earlier run is already waiting in that thread; don't add another.
+                new = clients[mail["source"]].create_reply_draft(call.id[2:], call.draft_reply)
             except Exception as e:
                 ok = False
                 print(f"A {mail['source']} draft failed: {type(e).__name__}")
-        drafts.append({"label": label, "source": mail["source"], "created": ok, "text": call.draft_reply})
+        drafts.append({"label": label, "source": mail["source"], "created": ok, "text": call.draft_reply,
+                       "alreadyWaiting": ok and not new})
 
     prep_ids = set(tri.needs_prep_event_ids)
     timer("save drafts")
@@ -206,6 +210,8 @@ def run(cfg: Config, demo: bool = False) -> dict:
     if demo:
         from .demo import fake_brief
         lines = fake_brief(facts)
+    elif quick_lines:
+        lines = quick_lines
     else:
         lines = brain.brief(facts)
     timer("Claude: spoken brief")
@@ -213,7 +219,7 @@ def run(cfg: Config, demo: bool = False) -> dict:
 
     # ---- voice ---------------------------------------------------------------
     audio = None
-    if cfg.fish_api_key and not demo:
+    if cfg.fish_api_key and not demo and not quick:
         try:
             from .voice import speak
             audio = speak(" ".join(lines), cfg.fish_api_key, cfg.fish_voice_id)
@@ -221,12 +227,15 @@ def run(cfg: Config, demo: bool = False) -> dict:
         except Exception as e:
             led.set("voice", "offline", plain_error(e))
     else:
-        led.set("voice", "offline", "Not connected (no FISH_AUDIO_API_KEY)." if not demo else "Demo: no audio.")
+        led.set("voice", "offline", "Skipped on quick refresh." if quick else
+                "Not connected (no FISH_AUDIO_API_KEY)." if not demo else "Demo: no audio.")
 
     timer("voice")
 
     # ---- Notion brief page ---------------------------------------------------
-    if "Notion" in clients:
+    if quick:
+        led.set("notion_page", "empty", "Skipped on quick refresh.")
+    elif "Notion" in clients:
         try:
             clients["Notion"].save_brief(f"Morning Brief — {now.date()}", lines,
                                          [d["label"] for d in drafts], led.footer())
@@ -248,8 +257,10 @@ def run(cfg: Config, demo: bool = False) -> dict:
         "top3": facts["top3"],
         "oneThing": tri.one_thing,
         "schedule": [{"time": "All day" if e["all_day"] else e["start_local"][11:16] + "–" + e["end_local"][11:16],
+                      "start": e["start_local"], "end": e["end_local"], "past": e["past"],
                       "title": e["title"], "source": e["source"], "needsPrep": e["id"] in prep_ids}
                      for e in events],
+        "quick": quick,
         "conflicts": [" vs ".join(p) for p in conflicts],
         "focusGaps": gaps,
         "drafts": drafts,
@@ -257,11 +268,14 @@ def run(cfg: Config, demo: bool = False) -> dict:
         "audio": base64.b64encode(audio).decode() if audio else None,
     }
 
+    payload["connectors"] = led.as_dict()  # final statuses, including voice
+    if not publish:
+        print(led.footer())
+        return payload
+
     # The push itself is sent by agent.notify after the site is deployed.
     cfg.out_dir.mkdir(exist_ok=True)
     (cfg.out_dir / "push.json").write_text(json.dumps({"title": "Morning brief ready", "body": lines[0]}))
-    payload["connectors"] = led.as_dict()  # final statuses, including voice and push
-
     if not cfg.passphrase:
         raise SystemExit("BRIEF_PASSPHRASE is required so the published brief is encrypted.")
     write_site(cfg.site_dir, ROOT / "app", payload, cfg.passphrase, cfg.vapid_public_key)
@@ -272,6 +286,10 @@ def run(cfg: Config, demo: bool = False) -> dict:
     print(led.footer())
     print(f"{len(lines)} brief lines, {sum(d['created'] for d in drafts)} drafts created.")
     return payload
+
+
+def part_of_day(now: datetime) -> str:
+    return "morning" if now.hour < 12 else "afternoon" if now.hour < 17 else "evening"
 
 
 def gather(led: Ledger, key: str, fn, sink: list, noun: str) -> int | None:

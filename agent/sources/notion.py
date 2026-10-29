@@ -52,6 +52,18 @@ class Notion:
                 notes.append({"title": title, "text": text[:4000]})
         return tasks, notes
 
+    def add_todo(self, text: str, page_title: str = "To Do List") -> None:
+        """Appends an unchecked to-do to the page with this title (it must be shared with the connection)."""
+        for hit in self._post("/search", {"query": page_title,
+                                          "filter": {"property": "object", "value": "page"}}).get("results", []):
+            if _title(hit).strip().lower() == page_title.lower():
+                r = self.s.patch(f"{API}/blocks/{hit['id']}/children", timeout=60, json={"children": [{
+                    "object": "block", "type": "to_do",
+                    "to_do": {"rich_text": [{"type": "text", "text": {"content": text[:1900]}}], "checked": False}}]})
+                r.raise_for_status()
+                return
+        raise RuntimeError(f'No page named "{page_title}" is shared with the Jarvis connection.')
+
     def save_brief(self, title: str, lines: list[str], drafts: list[str], footer: str) -> str:
         parent = None
         for hit in self._post("/search", {"query": "Morning Briefs",

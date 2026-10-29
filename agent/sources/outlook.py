@@ -134,9 +134,31 @@ class Outlook:
                             "preview": (m.get("bodyPreview") or "")[:300]})
         return out
 
-    def create_reply_draft(self, message_id: str, text: str) -> None:
+    def search(self, query: str, limit: int = 10) -> list[dict]:
+        rows = self._get(f"{GRAPH}/me/messages", {
+            "$search": f'"{query.replace(chr(34), "")}"', "$top": str(limit),
+            "$select": "id,subject,from,receivedDateTime,bodyPreview"}).get("value", [])
+        return [{"id": "o:" + m["id"], "source": "Outlook", "from": _addr(m.get("from")),
+                 "subject": m.get("subject") or "", "received": m.get("receivedDateTime"),
+                 "preview": (m.get("bodyPreview") or "")[:300]} for m in rows]
+
+    def read(self, message_id: str) -> dict:
+        m = self._get(f"{GRAPH}/me/messages/{message_id}", {
+            "$select": "subject,from,toRecipients,ccRecipients,receivedDateTime,body"})
+        return {"from": _addr(m.get("from")), "to": ", ".join(_addr(x) for x in m.get("toRecipients") or []),
+                "cc": ", ".join(_addr(x) for x in m.get("ccRecipients") or []), "subject": m.get("subject") or "",
+                "received": m.get("receivedDateTime"), "body": _clip(((m.get("body") or {}).get("content") or "").strip())}
+
+    def create_reply_draft(self, message_id: str, text: str) -> bool:
+        """Saves a reply draft in the conversation. Returns False if that conversation already has a draft."""
+        conversation = self._get(f"{GRAPH}/me/messages/{message_id}", {"$select": "conversationId"})["conversationId"]
+        existing = self._get(f"{GRAPH}/me/mailFolders/drafts/messages", {
+            "$filter": f"conversationId eq '{conversation}'", "$select": "id", "$top": "1"})
+        if existing.get("value"):
+            return False
         r = self.s.post(f"{GRAPH}/me/messages/{message_id}/createReply", json={"comment": text}, timeout=60)
         r.raise_for_status()
+        return True
 
 
 def _graph_dt(d: dict) -> str:
@@ -155,3 +177,25 @@ def _addr(x: dict | None) -> str:
 
 def _clip(s: str) -> str:
     return s if len(s) <= BODY_CHARS else s[:BODY_CHARS] + " …[truncated]"
+
+
+def connect(cfg) -> "Outlook":
+    """Signs in with the newest saved token, falling back to the one from settings (e.g. after
+    reconnecting Microsoft), and saves the rotated token Microsoft hands back."""
+    from agent.config import env
+    tokens = [t for t in dict.fromkeys([cfg.ms_refresh_token, env("MS_REFRESH_TOKEN")]) if t]
+    if not (tokens and cfg.ms_client_id):
+        raise RuntimeError("Not connected (no MS_REFRESH_TOKEN).")
+    error = None
+    for token in tokens:
+        try:
+            ms = Outlook(cfg.ms_client_id, cfg.ms_tenant, token)
+        except RuntimeError as e:
+            error = e
+            continue
+        if ms.new_refresh_token:
+            cfg.out_dir.mkdir(exist_ok=True)
+            (cfg.out_dir / "ms_refresh_token").write_text(ms.new_refresh_token)
+        return ms
+    raise error
+

@@ -30,7 +30,8 @@ def conflicts(events: list[dict]) -> list[tuple[str, str]]:
 
 
 def focus_gaps(events: list[dict], day: datetime, tz: ZoneInfo, minutes: int = 90) -> list[str]:
-    start = datetime.combine(day.date(), time(8, 0), tz)
+    # Gaps only count from now on, so an afternoon refresh doesn't offer focus time that has passed.
+    start = max(datetime.combine(day.date(), time(8, 0), tz), day.replace(second=0, microsecond=0))
     end = datetime.combine(day.date(), time(17, 0), tz)
     busy = sorted(
         (max(datetime.fromisoformat(e["start_local"]), start), min(datetime.fromisoformat(e["end_local"]), end))

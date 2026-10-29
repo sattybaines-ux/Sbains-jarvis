@@ -108,3 +108,27 @@ cd site && python -m http.server 8000   # open localhost:8000, passphrase "test"
 - **No drafts for money, passwords or credentials.** Those are listed as "handle yourself".
 - **Email content is treated as data, never as instructions.** Any email that tries to instruct the assistant is flagged as suspicious.
 - **A source that fails is reported as offline.** Counts for an offline source show "—", not 0.
+
+---
+
+## Jarvis server (talking assistant + new app)
+
+An always-on server on Oracle Cloud's free tier runs:
+- the new **Jarvis app**: Today, Ask (chat and voice) and Settings, at `https://<your-name>.duckdns.org`,
+- the **talking assistant**: Claude on your subscription with tools for Outlook, Gmail, both calendars and Notion. It can draft replies (never sends), and adding a to-do needs your **Confirm** tap,
+- the **morning brief** at 6:45 am on weekdays (`BRIEF_TIME` variable), plus a **refresh** button for a quick, time-aware brief,
+- **voice**: speech-to-text on the server (Whisper, free), replies spoken by Fish Audio or the iPhone's own voice.
+
+### Setup
+1. Create an Always Free **VM.Standard.A1.Flex** (Ubuntu 24.04) on Oracle. Open ports **80** and **443** in its subnet's security list.
+2. Get a free name at **duckdns.org** that points at the server's public IP.
+3. Add these to the repo:
+   - **Variable** `SERVER_HOST`: e.g. `satty-jarvis.duckdns.org`
+   - **Secret** `SERVER_SSH_KEY`: the full contents of the private key file Oracle gave you
+   - **Secret** `DUCKDNS_TOKEN`: your DuckDNS token
+4. **Actions → Deploy server → Run workflow.** It copies Jarvis to the server, writes your existing secrets into it, and sets up HTTPS and auto-start.
+5. On your iPhone, open `https://<your-name>.duckdns.org` in Safari → **Share → Add to Home Screen**. Sign in with your `BRIEF_PASSPHRASE`, then **Settings → Morning notification → Turn on**.
+6. Once the server brief works, disable the old GitHub schedule (**Actions → Morning brief → ••• → Disable workflow**), so you don't get two briefs.
+
+### Updates
+Upload a `jarvis-update.zip` to the top of the repo. The **Apply update zip** workflow unpacks it into the right folders and redeploys the server. Any change pushed to `agent/`, `server/`, `web/` or `config/` also redeploys.
