@@ -16,6 +16,7 @@ jobs:
     if: vars.SERVER_HOST != ''
     env:
       HOST: ${{ vars.SERVER_HOST }}
+      SERVER_USER: ${{ vars.SERVER_USER || 'ubuntu' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -59,10 +60,10 @@ jobs:
         env:
           DUCKDNS_TOKEN: ${{ secrets.DUCKDNS_TOKEN }}
         run: |
-          SSH="ssh -i ~/.ssh/jarvis -o BatchMode=yes ubuntu@$HOST"
-          $SSH 'sudo mkdir -p /opt/jarvis/app && sudo chown -R ubuntu /opt/jarvis/app'
+          SSH="ssh -i ~/.ssh/jarvis -o BatchMode=yes $SERVER_USER@$HOST"
+          $SSH "sudo mkdir -p /opt/jarvis/app && sudo chown -R $SERVER_USER /opt/jarvis/app"
           rsync -az --delete --exclude .git --exclude out --exclude site --exclude jarvis.env \
-            -e "ssh -i ~/.ssh/jarvis -o BatchMode=yes" ./ "ubuntu@$HOST:/opt/jarvis/app/"
+            -e "ssh -i ~/.ssh/jarvis -o BatchMode=yes" ./ "$SERVER_USER@$HOST:/opt/jarvis/app/"
           $SSH 'sudo tee /etc/jarvis.env >/dev/null' < jarvis.env
           rm -f jarvis.env
           $SSH "sudo DOMAIN='$HOST' DUCKDNS_TOKEN='$DUCKDNS_TOKEN' bash /opt/jarvis/app/deploy/install.sh"
