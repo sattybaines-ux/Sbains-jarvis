@@ -1,5 +1,7 @@
 """The two Claude calls: (1) triage + drafts + top 3, (2) the spoken brief."""
 import json
+import os
+import subprocess
 from typing import Literal
 
 import anthropic
@@ -78,11 +80,17 @@ class Brief(BaseModel):
 
 
 class Brain:
+    """Talks to Claude through your Claude subscription (Claude Code, CLAUDE_CODE_OAUTH_TOKEN)
+    when that token is set, otherwise through a paid API key (ANTHROPIC_API_KEY)."""
+
     def __init__(self, model: str, name: str, profile: str):
-        self.client = anthropic.Anthropic()
+        self.use_subscription = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
+        self.client = None if self.use_subscription else anthropic.Anthropic()
         self.model, self.name, self.profile = model, name, profile
 
     def _parse(self, system: str, data: dict, schema, effort: str):
+        if self.use_subscription:
+            return self._parse_subscription(system, data, schema, effort)
         resp = self.client.beta.messages.parse(
             model=self.model,
             max_tokens=16000,
@@ -100,6 +108,25 @@ class Brain:
         if resp.stop_reason == "max_tokens":
             raise RuntimeError("Claude ran out of output tokens.")
         return resp.parsed_output
+
+    def _parse_subscription(self, system: str, data: dict, schema, effort: str):
+        # Headless Claude Code with every tool switched off: it can only read the data and answer.
+        env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+        proc = subprocess.run(
+            ["claude", "-p", "Do the task in your instructions using the data on stdin.",
+             "--model", self.model, "--effort", effort, "--system-prompt", system,
+             "--output-format", "json", "--json-schema", json.dumps(schema.model_json_schema()),
+             "--tools", "", "--strict-mcp-config", "--no-session-persistence"],
+            input="<data>\n" + json.dumps(data, ensure_ascii=False, indent=1, default=str) + "\n</data>",
+            capture_output=True, text=True, timeout=900, env=env,
+        )
+        try:
+            out = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"Claude Code failed: {(proc.stderr or proc.stdout).strip()[-300:]}") from None
+        if out.get("is_error") or out.get("structured_output") is None:
+            raise RuntimeError(f"Claude Code error: {str(out.get('result'))[:300]}")
+        return schema.model_validate(out["structured_output"])
 
     def triage(self, today: str, data: dict) -> Triage:
         system = TRIAGE_TASK.format(name=self.name, sign=self.name, today=today, profile=self.profile,
