@@ -4,10 +4,12 @@ Run:  python -m agent.main            (real run; needs the secrets in README)
       python -m agent.main --demo     (sample data, no API calls; for testing the iPhone app)
 """
 import base64
+import copy
 import json
 import sys
 import time as clock
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
 from . import calendar_math
@@ -20,21 +22,25 @@ def plain_error(e: Exception) -> str:
     return (str(e) or type(e).__name__).splitlines()[0][:200]
 
 
-def run(cfg: Config, demo: bool = False, publish: bool = True, quick: bool = False) -> dict:
-    """publish: write the encrypted GitHub Pages site. quick: the fast refresh used by the Jarvis server
-    (one Claude call, no follow-up scan, no voice or Notion archive page)."""
-    started = clock.monotonic()
+@dataclass
+class Snapshot:
+    """Everything read from the accounts at one moment (the server keeps one warm for quick refreshes)."""
+    taken: datetime
+    led: Ledger
+    clients: dict
+    events: list
+    tomorrow: list
+    emails: list
+    followups: list
+    tasks: list
+    notes: list
 
-    def timer(phase: str) -> None:  # timings only; logs are public
-        print(f"[{clock.monotonic() - started:5.1f}s] {phase}")
 
+def collect(cfg: Config, demo: bool = False, quick: bool = False) -> Snapshot:
     tz = cfg.timezone
     now = datetime.now(tz)
     day_start = datetime.combine(now.date(), time.min, tz)
-    day_end = day_start + timedelta(days=1)
-    tomorrow_noon = day_end + timedelta(hours=12)
-    today_label = now.strftime("%A %B %-d, %Y")
-
+    tomorrow_noon = day_start + timedelta(days=1, hours=12)
     led = Ledger()
     for key, label in [("outlook_cal", "Outlook Calendar"), ("google_cal", "Google Calendar"),
                        ("outlook_mail", "Outlook Mail"), ("gmail", "Gmail"), ("notion", "Notion"),
@@ -103,6 +109,30 @@ def run(cfg: Config, demo: bool = False, publish: bool = True, quick: bool = Fal
         with ThreadPoolExecutor(max_workers=3) as pool:
             for f in [pool.submit(fn) for fn in (microsoft, google, notion)]:
                 f.result()
+    return Snapshot(now, led, clients, events, tomorrow, emails, followups, tasks, notes)
+
+
+def run(cfg: Config, demo: bool = False, publish: bool = True, quick: bool = False,
+        snapshot: "Snapshot | None" = None) -> dict:
+    """publish: write the encrypted GitHub Pages site. quick: the fast refresh used by the Jarvis server
+    (one Claude call, no follow-up scan, no voice or Notion archive page)."""
+    started = clock.monotonic()
+
+    def timer(phase: str) -> None:  # timings only; logs are public
+        print(f"[{clock.monotonic() - started:5.1f}s] {phase}")
+
+    tz = cfg.timezone
+    now = datetime.now(tz)
+    day_start = datetime.combine(now.date(), time.min, tz)
+    day_end = day_start + timedelta(days=1)
+    tomorrow_noon = day_end + timedelta(hours=12)
+    today_label = now.strftime("%A %B %-d, %Y")
+
+    snap = snapshot or collect(cfg, demo, quick)
+    led = copy.deepcopy(snap.led)
+    clients = snap.clients
+    events, tomorrow, emails = copy.deepcopy(snap.events), copy.deepcopy(snap.tomorrow), copy.deepcopy(snap.emails)
+    followups, tasks, notes = list(snap.followups), list(snap.tasks), list(snap.notes)
     timer("gather accounts")
 
     # ---- calendar math (deterministic) ---------------------------------------
@@ -126,7 +156,8 @@ def run(cfg: Config, demo: bool = False, publish: bool = True, quick: bool = Fal
         "calendar_tomorrow_morning": tomorrow,
         "conflicts": conflicts,
         "focus_gaps_90min": gaps,
-        "emails_last_24h": emails,
+        # A quick refresh only needs the gist of each email, which keeps Claude fast.
+        "emails_last_24h": [{**m, "body": m["body"][:500]} for m in emails] if quick else emails,
         "sent_emails_with_no_reply_yet": followups,
         "notion_open_tasks": tasks,
         "notion_priority_pages": notes,
@@ -160,6 +191,9 @@ def run(cfg: Config, demo: bool = False, publish: bool = True, quick: bool = Fal
         if group != "needs_reply":
             continue
         label = f"{mail['from']} — {mail['subject']}"
+        if quick:  # no drafting on a quick refresh; the morning brief or "draft a reply to…" does that
+            drafts.append({"label": label, "source": mail["source"], "created": False, "needsReply": True})
+            continue
         if call.handle_yourself or not call.draft_reply:
             drafts.append({"label": label + " (handle yourself)", "source": mail["source"], "created": False})
             continue

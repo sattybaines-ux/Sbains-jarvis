@@ -102,7 +102,8 @@ function renderBrief(d) {
   const drafts = d.drafts || [];
   $("drafts").replaceChildren(...(drafts.length ? drafts.map((x) => {
     const li = el("li", null, x.label);
-    li.append(el("small", null, x.alreadyWaiting ? `Already waiting in ${x.source}` : x.created ? `Saved in ${x.source} drafts` : "Handle yourself"));
+    li.append(el("small", null, x.needsReply ? "Needs a reply. Ask me to draft it" : x.alreadyWaiting ? `Already waiting in ${x.source}` :
+      x.created ? `Saved in ${x.source} drafts` : "Handle yourself"));
     return li;
   }) : [el("li", "note", "Nothing waiting.")]));
 
@@ -125,9 +126,10 @@ $("refresh").onclick = async () => {
   if ($("refresh").classList.contains("spin")) return;
   $("refresh").classList.add("spin");
   $("stamp").textContent = "Updating…";
+  $("hint").textContent = "Writing a fresh brief…";
   try {
     const r = await api("/api/refresh", { method: "POST" });
-    if (r.ok) renderBrief(await r.json());
+    if (r.ok) { renderBrief(await r.json()); $("hint").textContent = "Tap to talk"; }
     else {
       $("stamp").textContent = "Couldn't refresh";
       const why = (await r.json().catch(() => ({}))).detail;

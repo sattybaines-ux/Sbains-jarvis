@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from agent.config import ROOT, Config
-from agent.main import run as run_brief
+from agent.main import collect, run as run_brief
 from . import speech, store
 from .accounts import Accounts
 from .assistant import Assistant
@@ -53,6 +53,8 @@ def _valid(token: str | None) -> bool:
 accounts = Accounts(demo=DEMO)
 assistant = Assistant(accounts, store.latest_brief)
 _refreshing = asyncio.Lock()
+_snapshot = None  # accounts read in the background, so a refresh only has to write the brief
+FRESH = timedelta(minutes=10)
 _failed_logins: list[float] = []
 
 
@@ -77,9 +79,22 @@ async def _morning_loop():
             print("Morning brief failed:", type(e).__name__, str(e)[:200])
 
 
+async def _prefetch_loop():
+    global _snapshot
+    while True:
+        hour = datetime.now(Config().timezone).hour
+        if 6 <= hour < 22:
+            try:
+                _snapshot = await asyncio.to_thread(collect, Config(), DEMO, True)
+            except Exception as e:
+                print("Background read failed:", type(e).__name__, str(e)[:200])
+        await asyncio.sleep(FRESH.total_seconds() - 30)
+
+
 async def make_brief(quick: bool) -> dict:
     async with _refreshing:
-        payload = await asyncio.to_thread(run_brief, Config(), DEMO, False, quick)
+        snap = _snapshot if quick and _snapshot and datetime.now(Config().timezone) - _snapshot.taken < FRESH else None
+        payload = await asyncio.to_thread(run_brief, Config(), DEMO, False, quick, snap)
         store.save_brief(payload)
         return payload
 
@@ -97,7 +112,8 @@ async def notify(title: str, body: str) -> None:
 
 @asynccontextmanager
 async def lifespan(_app):
-    tasks = [asyncio.create_task(_morning_loop()), asyncio.create_task(asyncio.to_thread(speech.warm_up))]
+    tasks = [asyncio.create_task(_morning_loop()), asyncio.create_task(_prefetch_loop()),
+             asyncio.create_task(asyncio.to_thread(speech.warm_up))]
     yield
     for t in tasks:
         t.cancel()

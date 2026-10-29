@@ -103,8 +103,9 @@ class QuickBrief(Triage):
 QUICK_EXTRA = """
 Then also write `lines`: the brief to be spoken aloud right now, 6-8 short lines, Jarvis talking to {name} ("you"),
 warm and direct, no bullets or markdown. Greet for the time of day (morning / afternoon / evening), cover only what's
-still ahead today (skip past events), the inbox counts per group (say replies are drafted only for needs_reply emails
-you wrote a draft_reply for), the top 3, the one thing to know, and end exactly with: {final}
+still ahead today (skip past events), the inbox counts per group, the top 3, the one thing to know, and end exactly
+with: {final}
+This is a quick refresh: leave draft_reply empty for every email and don't say anything was drafted.
 If a source is offline or empty, say so plainly.
 """
 
