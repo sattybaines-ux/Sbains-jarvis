@@ -1,0 +1,32 @@
+name: Apply update zip
+
+# Upload jarvis-update.zip to the top of the repo (Add file -> Upload files) and this
+# unpacks it into the right folders, removes the zip, and deploys to the server.
+on:
+  push:
+    branches: [main]
+    paths: ["jarvis-update.zip"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Unpack
+        run: |
+          [ -f jarvis-update.zip ] || { echo "No jarvis-update.zip in the repo."; exit 0; }
+          unzip -o jarvis-update.zip > /dev/null
+          git rm -q jarvis-update.zip
+          git config user.name "jarvis-updater"
+          git config user.email "jarvis-updater@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Apply Jarvis update" && git push
+      - name: Deploy to the server
+        env:
+          GH_TOKEN: ${{ secrets.GH_ADMIN_TOKEN }}
+        run: |
+          if [ -n "$GH_TOKEN" ] && [ -f .github/workflows/deploy.yml ]; then gh workflow run deploy.yml; fi
