@@ -41,6 +41,10 @@ sudo -u jarvis python3 -m venv /opt/jarvis/venv
 sudo -u jarvis /opt/jarvis/venv/bin/pip install -q --upgrade pip
 sudo -u jarvis /opt/jarvis/venv/bin/pip install -q -r "$APP/requirements.txt" -r "$APP/server/requirements.txt"
 
+# Small servers (Google's free e2-micro has 1 GB) get the lighter, faster speech model.
+mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+WHISPER=$([ "$mem_mb" -lt 3000 ] && echo tiny.en || echo base.en)
+
 echo "== service"
 cat > /etc/systemd/system/jarvis.service <<UNIT
 [Unit]
@@ -53,6 +57,7 @@ User=jarvis
 WorkingDirectory=$APP
 EnvironmentFile=/etc/jarvis.env
 Environment=HOME=/opt/jarvis
+Environment=WHISPER_MODEL=$WHISPER
 ExecStart=/opt/jarvis/venv/bin/uvicorn server.app:app --host 127.0.0.1 --port 8000 --proxy-headers
 Restart=always
 RestartSec=3
