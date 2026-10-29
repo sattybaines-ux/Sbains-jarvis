@@ -1,0 +1,34 @@
+name: Connect accounts
+
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: What to connect
+        type: choice
+        options: [microsoft, google-start, google-finish, push-keys]
+      code:
+        description: Only for google-finish - the code from the localhost address bar
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  connect:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_ADMIN_TOKEN }}
+      MS_CLIENT_ID: ${{ vars.MS_CLIENT_ID }}
+      MS_TENANT_ID: ${{ vars.MS_TENANT_ID }}
+      GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      CODE: ${{ inputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: echo "::add-mask::$CODE"
+      - run: python -m agent.setup "${{ inputs.step }}" "$CODE"

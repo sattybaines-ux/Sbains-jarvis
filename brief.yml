@@ -1,0 +1,76 @@
+name: Morning brief
+
+on:
+  schedule:
+    # 10:47 UTC on weekdays = 6:47 am Eastern (winter) / 5:47 am (summer). GitHub can start it a few minutes late.
+    - cron: "47 10 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: brief
+  cancel-in-progress: false
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      BRIEF_PASSPHRASE: ${{ secrets.BRIEF_PASSPHRASE }}
+      MS_CLIENT_ID: ${{ vars.MS_CLIENT_ID }}
+      MS_TENANT_ID: ${{ vars.MS_TENANT_ID }}
+      MS_REFRESH_TOKEN: ${{ secrets.MS_REFRESH_TOKEN }}
+      GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      FISH_AUDIO_API_KEY: ${{ secrets.FISH_AUDIO_API_KEY }}
+      FISH_AUDIO_VOICE_ID: ${{ vars.FISH_AUDIO_VOICE_ID }}
+      VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+      VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+      VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
+      PUSH_SUBSCRIPTIONS: ${{ secrets.PUSH_SUBSCRIPTIONS }}
+      TIMEZONE: ${{ vars.TIMEZONE }}
+      USER_NAME: ${{ vars.USER_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Build the brief
+        run: python -m agent.main
+
+      - name: Save Microsoft's rotated sign-in token
+        if: always() && hashFiles('out/ms_refresh_token') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_ADMIN_TOKEN }}
+        run: |
+          if [ -n "$GH_TOKEN" ]; then gh secret set MS_REFRESH_TOKEN < out/ms_refresh_token; fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Notify iPhone
+        run: python -m agent.notify
+
+      - name: Keep the schedule alive
+        # GitHub pauses scheduled workflows in public repos after 60 days without commits.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_ADMIN_TOKEN }}
+        run: |
+          if [ -n "$GH_TOKEN" ]; then gh api -X PUT "repos/${{ github.repository }}/actions/workflows/brief.yml/enable"; fi
