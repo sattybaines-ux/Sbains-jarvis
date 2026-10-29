@@ -25,10 +25,10 @@ jobs:
       GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
       CODE: ${{ inputs.code }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - run: echo "::add-mask::$CODE"
+      - run: if [ -n "$CODE" ]; then echo "::add-mask::$CODE"; fi
       - run: python -m agent.setup "${{ inputs.step }}" "$CODE"
