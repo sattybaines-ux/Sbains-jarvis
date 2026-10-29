@@ -1,0 +1,7 @@
+anthropic>=2.3.0
+pydantic>=2.7
+requests>=2.32
+google-api-python-client>=2.140
+google-auth>=2.34
+cryptography>=43
+pywebpush>=2.0
