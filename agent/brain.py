@@ -1,6 +1,7 @@
 """The two Claude calls: (1) triage + drafts + top 3, (2) the spoken brief."""
 import json
 import os
+import shutil
 import subprocess
 from typing import Literal
 
@@ -52,6 +53,22 @@ Then the one thing to know.
 Last line, exactly: {final}
 If any source is offline or empty, say so plainly in the relevant line (e.g. "Gmail's offline this morning, so I couldn't check it."). Never smooth it over. Use only facts given; invent nothing.
 """
+
+
+def _claude_cli() -> str:
+    """The Claude Code program: installed on its own (GitHub Actions), or the copy bundled
+    inside the Agent SDK (the Jarvis server)."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    try:
+        import claude_agent_sdk
+        bundled = os.path.join(os.path.dirname(claude_agent_sdk.__file__), "_bundled", "claude")
+        if os.path.exists(bundled):
+            return bundled
+    except ImportError:
+        pass
+    raise RuntimeError("Claude Code isn't installed on this machine.")
 
 
 class EmailCall(BaseModel):
@@ -126,7 +143,7 @@ class Brain:
         # Headless Claude Code with every tool switched off: it can only read the data and answer.
         env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
         proc = subprocess.run(
-            ["claude", "-p", "Do the task in your instructions using the data on stdin.",
+            [_claude_cli(), "-p", "Do the task in your instructions using the data on stdin.",
              "--model", self.model, "--effort", effort, "--system-prompt", system,
              "--output-format", "json", "--json-schema", json.dumps(schema.model_json_schema()),
              "--tools", "", "--strict-mcp-config", "--no-session-persistence"],

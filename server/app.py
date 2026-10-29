@@ -161,7 +161,11 @@ async def brief():
 
 @app.post("/api/refresh")
 async def refresh():
-    return await make_brief(quick=True)
+    try:
+        return await make_brief(quick=True)
+    except Exception as e:
+        print("Refresh failed:", type(e).__name__, str(e)[:300])
+        raise HTTPException(500, str(e).splitlines()[0][:160] if str(e) else type(e).__name__)
 
 
 # ---- conversation ----------------------------------------------------------------

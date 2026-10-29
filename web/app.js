@@ -127,7 +127,12 @@ $("refresh").onclick = async () => {
   $("stamp").textContent = "Updating…";
   try {
     const r = await api("/api/refresh", { method: "POST" });
-    if (r.ok) renderBrief(await r.json()); else $("stamp").textContent = "Couldn't refresh";
+    if (r.ok) renderBrief(await r.json());
+    else {
+      $("stamp").textContent = "Couldn't refresh";
+      const why = (await r.json().catch(() => ({}))).detail;
+      if (why) $("hint").textContent = "Refresh failed: " + why;
+    }
   } catch (_) { $("stamp").textContent = "Offline"; }
   $("refresh").classList.remove("spin");
 };

@@ -6,14 +6,18 @@ set -euo pipefail
 APP=/opt/jarvis/app
 DATA=/var/lib/jarvis
 
+echo "== waiting for the server's own first-boot updates to finish"
+cloud-init status --wait >/dev/null 2>&1 || true
+APT="apt-get -o DPkg::Lock::Timeout=900 -q"
+
 echo "== packages"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq python3-venv python3-pip curl debian-keyring debian-archive-keyring apt-transport-https netfilter-persistent >/dev/null
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l  # list, don't restart services mid-install
+$APT update
+$APT install -y python3-venv python3-pip curl debian-keyring debian-archive-keyring apt-transport-https netfilter-persistent
 if ! command -v caddy >/dev/null; then
   curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
-  apt-get update -qq && apt-get install -y -qq caddy >/dev/null
+  $APT update && $APT install -y caddy
 fi
 
 echo "== firewall (Oracle's Ubuntu image only allows SSH by default)"
