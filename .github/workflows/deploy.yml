@@ -1,0 +1,68 @@
+name: Deploy server
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: ["agent/**", "server/**", "web/**", "config/**", "deploy/**", "requirements.txt"]
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: vars.SERVER_HOST != ''
+    env:
+      HOST: ${{ vars.SERVER_HOST }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: SSH key
+        env:
+          KEY: ${{ secrets.SERVER_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && printf '%s\n' "$KEY" > ~/.ssh/jarvis && chmod 600 ~/.ssh/jarvis
+          ssh-keyscan -T 20 "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Settings file (from repo secrets, never printed)
+        env:
+          BRIEF_PASSPHRASE: ${{ secrets.BRIEF_PASSPHRASE }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          MS_CLIENT_ID: ${{ vars.MS_CLIENT_ID }}
+          MS_TENANT_ID: ${{ vars.MS_TENANT_ID }}
+          MS_REFRESH_TOKEN: ${{ secrets.MS_REFRESH_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          FISH_AUDIO_API_KEY: ${{ secrets.FISH_AUDIO_API_KEY }}
+          FISH_AUDIO_VOICE_ID: ${{ vars.FISH_AUDIO_VOICE_ID }}
+          VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
+          TIMEZONE: ${{ vars.TIMEZONE }}
+          USER_NAME: ${{ vars.USER_NAME }}
+          CHAT_MODEL: ${{ vars.CHAT_MODEL }}
+          BRIEF_TIME: ${{ vars.BRIEF_TIME }}
+        run: |
+          umask 077
+          for k in BRIEF_PASSPHRASE CLAUDE_CODE_OAUTH_TOKEN MS_CLIENT_ID MS_TENANT_ID MS_REFRESH_TOKEN GOOGLE_CLIENT_ID \
+                   GOOGLE_CLIENT_SECRET GOOGLE_REFRESH_TOKEN NOTION_TOKEN FISH_AUDIO_API_KEY FISH_AUDIO_VOICE_ID \
+                   VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT TIMEZONE USER_NAME CHAT_MODEL BRIEF_TIME; do
+            v="${!k}"
+            if [ -n "$v" ]; then printf '%s=%s\n' "$k" "$v"; fi
+          done > jarvis.env
+
+      - name: Copy and install
+        env:
+          DUCKDNS_TOKEN: ${{ secrets.DUCKDNS_TOKEN }}
+        run: |
+          SSH="ssh -i ~/.ssh/jarvis -o BatchMode=yes ubuntu@$HOST"
+          $SSH 'sudo mkdir -p /opt/jarvis/app && sudo chown -R ubuntu /opt/jarvis/app'
+          rsync -az --delete --exclude .git --exclude out --exclude site --exclude jarvis.env \
+            -e "ssh -i ~/.ssh/jarvis -o BatchMode=yes" ./ "ubuntu@$HOST:/opt/jarvis/app/"
+          $SSH 'sudo tee /etc/jarvis.env >/dev/null' < jarvis.env
+          rm -f jarvis.env
+          $SSH "sudo DOMAIN='$HOST' DUCKDNS_TOKEN='$DUCKDNS_TOKEN' bash /opt/jarvis/app/deploy/install.sh"
