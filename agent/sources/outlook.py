@@ -1,4 +1,5 @@
 """Microsoft 365: Outlook calendar + mail via Microsoft Graph (delegated, refresh-token auth)."""
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -82,8 +83,11 @@ class Outlook:
                        "uniqueBody,bodyPreview,inferenceClassification,hasAttachments",
             "$top": "50",
         })
+        # One "did I reply?" lookup per email; run them side by side instead of one at a time.
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            replied = list(pool.map(lambda m: self._replied(m["conversationId"], m["receivedDateTime"]), rows))
         out = []
-        for m in rows:
+        for m, you_replied in zip(rows, replied):
             body = ((m.get("uniqueBody") or {}).get("content") or m.get("bodyPreview") or "").strip()
             out.append({
                 "id": "o:" + m["id"],
@@ -93,7 +97,7 @@ class Outlook:
                 "cc": ", ".join(_addr(x) for x in m.get("ccRecipients") or []),
                 "subject": m.get("subject") or "",
                 "received": m["receivedDateTime"],
-                "you_replied_after": self._replied(m["conversationId"], m["receivedDateTime"]),
+                "you_replied_after": you_replied,
                 "category_hint": "focused" if m.get("inferenceClassification") == "focused" else "other",
                 "has_attachments": m.get("hasAttachments", False),
                 "body": _clip(body),
