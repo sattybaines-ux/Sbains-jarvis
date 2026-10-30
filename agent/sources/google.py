@@ -73,9 +73,15 @@ class Google:
         hours = max(1, int((datetime.now(timezone.utc) - since).total_seconds() // 3600))
         q = f"in:inbox newer_than:{hours}h -category:promotions -category:social -in:spam"
         ids = self._list_ids(q, cap=100)
+        # Fetch the emails, then their threads (for "did I already reply?"), in batches rather than one by one.
+        msgs = self._batch({mid: self.gm.users().messages().get(userId="me", id=mid, format="full") for mid in ids})
+        threads = self._batch({m["threadId"]: self.gm.users().threads().get(userId="me", id=m["threadId"], format="minimal")
+                               for m in msgs.values()})
         out = []
         for mid in ids:
-            m = self.gm.users().messages().get(userId="me", id=mid, format="full").execute()
+            m = msgs.get(mid)
+            if not m:
+                continue
             h = _headers(m)
             out.append({
                 "id": "g:" + mid,
@@ -85,7 +91,7 @@ class Google:
                 "cc": h.get("cc", ""),
                 "subject": h.get("subject", ""),
                 "received": datetime.fromtimestamp(int(m["internalDate"]) / 1000, timezone.utc).isoformat(),
-                "you_replied_after": self._replied(m),
+                "you_replied_after": _replied(m, threads.get(m["threadId"])),
                 "category_hint": "updates" if "CATEGORY_UPDATES" in m.get("labelIds", []) else "primary",
                 "has_attachments": any(p.get("filename") for p in _parts(m["payload"])),
                 "body": _clip(_plain_text(m["payload"]) or m.get("snippet", "")),
@@ -102,10 +108,20 @@ class Google:
                 break
         return ids[:cap]
 
-    def _replied(self, m: dict) -> bool:
-        t = self.gm.users().threads().get(userId="me", id=m["threadId"], format="minimal").execute()
-        return any("SENT" in x.get("labelIds", []) and int(x["internalDate"]) > int(m["internalDate"])
-                   for x in t.get("messages", []))
+    def _batch(self, requests: dict) -> dict:
+        """Runs many Gmail requests in a few round trips. Returns {key: result}; failed ones are left out."""
+        results, items = {}, list(requests.items())
+
+        def done(key, response, error):
+            if error is None:
+                results[key] = response
+
+        for i in range(0, len(items), 40):  # Gmail allows up to 50 per batch
+            batch = self.gm.new_batch_http_request(callback=done)
+            for key, req in items[i:i + 40]:
+                batch.add(req, request_id=key)
+            batch.execute()
+        return results
 
     def unanswered_sent(self, now: datetime) -> list[dict]:
         out = []
@@ -160,6 +176,13 @@ class Google:
         self.gm.users().drafts().create(
             userId="me", body={"message": {"raw": raw, "threadId": m["threadId"]}}).execute()
         return True
+
+
+def _replied(m: dict, thread: dict | None) -> bool | None:
+    if thread is None:
+        return None  # couldn't check
+    return any("SENT" in x.get("labelIds", []) and int(x["internalDate"]) > int(m["internalDate"])
+               for x in thread.get("messages", []))
 
 
 def _headers(m: dict) -> dict:

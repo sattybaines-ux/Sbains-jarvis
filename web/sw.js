@@ -1,5 +1,5 @@
 // Jarvis service worker: works offline for the app shell, shows morning notifications.
-const SHELL = "jarvis-v3";
+const SHELL = "jarvis-v4";
 const FILES = ["/", "/index.html", "/styles.css", "/app.js", "/manifest.webmanifest", "/icons/icon-192.png"];
 
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES))); self.skipWaiting(); });

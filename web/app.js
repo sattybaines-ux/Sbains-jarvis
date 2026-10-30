@@ -6,7 +6,7 @@ const pref = {
   set(k, v) { try { localStorage.setItem("jarvis." + k, JSON.stringify(v)); } catch (_) {} },
 };
 
-let me = null, brief = null, busy = false;
+let me = null, brief = null, busy = false, inflight = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { credentials: "same-origin", ...opts,
@@ -107,6 +107,9 @@ function renderBrief(d) {
     return li;
   }) : [el("li", "note", "Nothing waiting.")]));
 
+  const t = d.timings || {};
+  $("timing").textContent = t["Notion brief page"] !== undefined
+    ? `Made in ${t["Notion brief page"]}s · reading ${t["gather accounts"]}s · Claude ${(t["Claude: triage"] - t["gather accounts"]).toFixed(1)}s` : "";
   $("sources").replaceChildren(...Object.values(d.connectors || {}).map((c) => {
     const s = el("span", "src"); s.title = c.log; s.append(el("i", c.status), c.label); return s;
   }));
@@ -166,7 +169,10 @@ async function send(text, voice) {
   setOrb("thinking", "Thinking…");
   let full = "", sentences = "";
   try {
-    const r = await api("/api/chat", { method: "POST", body: JSON.stringify({ message: text, voice }) });
+    inflight = new AbortController();
+    const limit = setTimeout(() => inflight && inflight.abort(), 150000);  // never hang forever
+    const r = await api("/api/chat", { method: "POST", body: JSON.stringify({ message: text, voice }), signal: inflight.signal });
+    reply.dataset.limit = limit;
     const reader = r.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for (;;) {
@@ -194,8 +200,11 @@ async function send(text, voice) {
     }
     if (voice && pref.get("speak", true) && sentences.trim()) say(sentences.trim());
   } catch (e) {
-    if (e.message !== "signed out") reply.textContent = "I can't reach the server right now.";
+    if (e.name === "AbortError") reply.textContent = full || "Stopped.";
+    else if (e.message !== "signed out") reply.textContent = "I can't reach the server right now.";
   }
+  clearTimeout(Number(reply.dataset.limit));
+  inflight = null;
   if (!full.trim() && !reply.textContent.trim()) reply.textContent = "Done.";
   $("hint").textContent = (full.trim().split("\n").pop() || "Tap to talk").slice(0, 160);
   if (!speaking()) setOrb("idle");
@@ -290,18 +299,46 @@ async function startListening() {
     recorder.start();
     setOrb("listening", "Listening… tap to finish");
     stopTimer = setTimeout(() => recorder && recorder.state === "recording" && recorder.stop(), 30000);
-  } catch (_) {
-    setOrb("idle", "Allow the microphone for Jarvis in Settings to talk.");
+  } catch (e) {
+    const why = e && e.name === "NotAllowedError" ? "Jarvis isn't allowed to use the microphone. Tap again and choose Allow."
+      : e && e.name === "NotFoundError" ? "No microphone found."
+      : !navigator.mediaDevices ? "Voice needs the secure https address. Open Jarvis from its Home Screen icon."
+      : `Couldn't start the microphone (${(e && e.name) || "unknown"}).`;
+    setOrb("idle", why);
   }
 }
 
 function toggleTalk() {
   if (recorder && recorder.state === "recording") { recorder.stop(); return; }
   if (speaking()) { speechSynthesis.cancel(); try { current && current.stop(); } catch (_) {} pending = 0; setOrb("idle", "Tap to talk"); return; }
-  if (!busy) startListening();
+  if (busy) {  // still answering: a tap stops it, so the orb never feels frozen
+    if (inflight) inflight.abort();
+    setOrb("idle", "Stopped. Tap to talk.");
+    return;
+  }
+  startListening();
 }
 $("orb").onclick = toggleTalk;
 $("askMic").onclick = toggleTalk;
+
+// ---------- health check ----------
+$("diag").onclick = async () => {
+  $("diag").textContent = "Checking… (up to a minute)";
+  $("diagOut").classList.remove("hidden");
+  $("diagOut").textContent = "";
+  try {
+    const r = await api("/api/diag?test=true");
+    const d = await r.json();
+    const lines = [];
+    for (const [k, v] of Object.entries(d)) {
+      if (k === "recent activity") { lines.push("", "Recent activity:", ...v); continue; }
+      if (v && typeof v === "object") { lines.push(k + ":"); for (const [a, b] of Object.entries(v)) lines.push(`  ${a}: ${typeof b === "object" ? JSON.stringify(b) : b}`); }
+      else lines.push(`${k}: ${v}`);
+    }
+    $("diagOut").textContent = lines.join("\n");
+  } catch (e) { $("diagOut").textContent = "Couldn't reach the server: " + e.message; }
+  $("diag").textContent = "Run again";
+};
 
 // ---------- settings ----------
 function renderSettings() {

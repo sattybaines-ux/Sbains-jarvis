@@ -91,6 +91,7 @@
     <article class="card">
       <div class="card-h"><h2>Sources</h2></div>
       <div class="sources" id="sources"></div>
+      <div class="note" id="timing"></div>
     </article>
   </section>
 
@@ -112,6 +113,11 @@
       <div class="setting"><div>Speak replies<small>Jarvis answers out loud when you talk to it.</small></div><button class="toggle" id="speakToggle"></button></div>
       <div class="setting"><div>Appearance<small>Follow your phone, or pick one.</small></div><button class="toggle" id="theme"></button></div>
       <div class="setting"><div>Connected<small id="connected"></small></div></div>
+    </article>
+    <article class="card">
+      <div class="card-h"><h2>Health check</h2><button class="toggle" id="diag">Run</button></div>
+      <p class="note">Shows what the server is doing. Screenshot it if something isn't working.</p>
+      <pre id="diagOut" class="diag hidden"></pre>
     </article>
   </section>
 </main>

@@ -96,17 +96,36 @@ class Brief(BaseModel):
     lines: list[str]
 
 
-class QuickBrief(Triage):
+class NeedsYou(BaseModel):
+    id: str
+    why: str = Field(description="A few words: what they need from Satty.")
+
+
+class QuickBrief(BaseModel):
+    needs_prep_event_ids: list[str]
+    needs_reply: list[NeedsYou] = Field(description="Only emails where a person is waiting on Satty and you_already_replied is not true.")
+    top3: list[TopItem]
+    one_thing: str
     lines: list[str] = Field(description="The spoken brief, 6-8 lines, last line exactly the final question.")
 
 
-QUICK_EXTRA = """
-Then also write `lines`: the brief to be spoken aloud right now, 6-8 short lines, Jarvis talking to {name} ("you"),
-warm and direct, no bullets or markdown. Greet for the time of day (morning / afternoon / evening), cover only what's
-still ahead today (skip past events), the inbox counts per group, the top 3, the one thing to know, and end exactly
-with: {final}
-This is a quick refresh: leave draft_reply empty for every email and don't say anything was drafted.
-If a source is offline or empty, say so plainly.
+QUICK_TASK = """\
+You are {name}'s chief of staff. It's {today}; refresh the brief for the rest of the day, quickly.
+
+{profile}
+
+{rules}
+From the DATA:
+- needs_prep_event_ids: upcoming (not past) events that need prep: {name} organizes it, it's a review/decision/client/
+  inspection meeting, it has a doc, or it relates to a standing project.
+- needs_reply: ONLY the emails where a person is directly asking {name} something or waiting on him, and
+  you_replied_after is not true. Skip everything else; don't list FYI or newsletters.
+- top3: the three things that matter most for the rest of today, ranked, one-line why each.
+- one_thing: one real signal from the data, or exactly "Nothing urgent stands out."
+- lines: the brief to be spoken aloud now, 6-8 short lines, Jarvis talking to {name} ("you"), warm and direct, no
+  bullets or markdown. Greet for the time of day, cover only what's still ahead today, how many emails need a reply,
+  the top 3, the one thing to know, and end exactly with: {final}
+  Don't say anything was drafted. If a source is offline or empty, say so plainly.
 """
 
 
@@ -114,7 +133,8 @@ class Brain:
     """Talks to Claude through your Claude subscription (Claude Code, CLAUDE_CODE_OAUTH_TOKEN)
     when that token is set, otherwise through a paid API key (ANTHROPIC_API_KEY)."""
 
-    def __init__(self, model: str, name: str, profile: str):
+    def __init__(self, model: str, name: str, profile: str, quick_writer=None):
+        self.quick_writer = quick_writer  # the server's always-ready Claude session (prompt -> JSON), if any
         self.use_subscription = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
         self.client = None if self.use_subscription else anthropic.Anthropic()
         self.model, self.name, self.profile = model, name, profile
@@ -149,7 +169,7 @@ class Brain:
              "--output-format", "json", "--json-schema", json.dumps(schema.model_json_schema()),
              "--tools", "", "--strict-mcp-config", "--no-session-persistence"],
             input="<data>\n" + json.dumps(data, ensure_ascii=False, indent=1, default=str) + "\n</data>",
-            capture_output=True, text=True, timeout=900, env=env,
+            capture_output=True, text=True, timeout=300, env=env,
         )
         try:
             out = json.loads(proc.stdout)
@@ -165,12 +185,19 @@ class Brain:
         return self._parse(system, data, Triage, effort="high")
 
     def quick(self, today: str, data: dict) -> tuple[Triage, list[str]]:
-        """Triage and the spoken brief in one fast call, for the refresh button."""
-        system = TRIAGE_TASK.format(name=self.name, sign=self.name, today=today, profile=self.profile,
-                                    rules=RULES.format(name=self.name)) + QUICK_EXTRA.format(name=self.name, final=FINAL_LINE)
-        out = self._parse(system, data, QuickBrief, effort="low")
+        """The refresh button: only what needs Satty plus the spoken brief, in one fast call
+        (no per-email sorting or drafting, which is what makes the full brief slow)."""
+        system = QUICK_TASK.format(name=self.name, today=today, profile=self.profile,
+                                   rules=RULES.format(name=self.name), final=FINAL_LINE)
+        if self.quick_writer:
+            body = json.dumps(data, ensure_ascii=False, indent=1, default=str)
+            out = QuickBrief.model_validate(self.quick_writer(f"{system}\n<data>\n{body}\n</data>"))
+        else:
+            out = self._parse(system, data, QuickBrief, effort="low")
         lines = [l.strip() for l in out.lines if l.strip() and l.strip() != FINAL_LINE] + [FINAL_LINE]
-        return Triage(**out.model_dump(exclude={"lines"})), lines
+        tri = Triage(needs_prep_event_ids=out.needs_prep_event_ids, top3=out.top3, one_thing=out.one_thing,
+                     emails=[EmailCall(id=n.id, group="needs_reply") for n in out.needs_reply])
+        return tri, lines
 
     def brief(self, facts: dict) -> list[str]:
         n = 5 + min(3, max(1, len(facts.get("top3", []))))  # 6-8 lines

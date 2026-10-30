@@ -20,9 +20,11 @@ from pydantic import BaseModel
 
 from agent.config import ROOT, Config
 from agent.main import collect, run as run_brief
-from . import speech, store
+from . import diag, speech, store
 from .accounts import Accounts
 from .assistant import Assistant
+from .warm import WarmWriter
+from agent.brain import QuickBrief
 
 DEMO = os.environ.get("JARVIS_DEMO") == "1"
 COOKIE = "jarvis_session"
@@ -54,6 +56,7 @@ accounts = Accounts(demo=DEMO)
 assistant = Assistant(accounts, store.latest_brief)
 _refreshing = asyncio.Lock()
 _snapshot = None  # accounts read in the background, so a refresh only has to write the brief
+writer = WarmWriter(QuickBrief.model_json_schema())
 FRESH = timedelta(minutes=10)
 _failed_logins: list[float] = []
 
@@ -84,17 +87,24 @@ async def _prefetch_loop():
     while True:
         hour = datetime.now(Config().timezone).hour
         if 6 <= hour < 22:
+            t = time.monotonic()
             try:
                 _snapshot = await asyncio.to_thread(collect, Config(), DEMO, True)
+                bad = [f"{r['label']}: {r['log']}" for r in _snapshot.led.as_dict().values() if r["status"] == "offline"
+                       and r["label"] not in ("Notion brief page", "Fish Audio")]
+                diag.log(f"Background read done in {time.monotonic() - t:.1f}s" + (f"; offline: {'; '.join(bad)}" if bad else ""))
             except Exception as e:
-                print("Background read failed:", type(e).__name__, str(e)[:200])
+                diag.log(f"Background read failed: {type(e).__name__}: {str(e)[:200]}")
         await asyncio.sleep(FRESH.total_seconds() - 30)
 
 
 async def make_brief(quick: bool) -> dict:
     async with _refreshing:
         snap = _snapshot if quick and _snapshot and datetime.now(Config().timezone) - _snapshot.taken < FRESH else None
-        payload = await asyncio.to_thread(run_brief, Config(), DEMO, False, quick, snap)
+        writer_fn = writer.ask_from_thread if quick and not DEMO else None
+        diag.log(f"{'Refresh' if quick else 'Morning brief'} started ({'using background read' if snap else 'reading accounts now'})")
+        payload = await asyncio.to_thread(run_brief, Config(), DEMO, False, quick, snap, writer_fn)
+        diag.state["last_brief"] = {"at": payload["generatedAt"], "quick": quick, "timings": payload.get("timings")}
         store.save_brief(payload)
         return payload
 
@@ -112,6 +122,9 @@ async def notify(title: str, body: str) -> None:
 
 @asynccontextmanager
 async def lifespan(_app):
+    diag.capture_prints()
+    if not DEMO:
+        writer.warm()
     tasks = [asyncio.create_task(_morning_loop()), asyncio.create_task(_prefetch_loop()),
              asyncio.create_task(asyncio.to_thread(speech.warm_up))]
     yield
@@ -180,7 +193,7 @@ async def refresh():
     try:
         return await make_brief(quick=True)
     except Exception as e:
-        print("Refresh failed:", type(e).__name__, str(e)[:300])
+        diag.log(f"Refresh failed: {type(e).__name__}: {str(e)[:300]}")
         raise HTTPException(500, str(e).splitlines()[0][:160] if str(e) else type(e).__name__)
 
 
@@ -197,7 +210,7 @@ async def chat(body: Chat):
             async for event in assistant.chat(body.message[:4000], body.voice):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as e:
-            print("Chat failed:", type(e).__name__, str(e)[:300])
+            diag.log(f"Chat failed: {type(e).__name__}: {str(e)[:300]}")
             await assistant.reset()
             yield f"data: {json.dumps({'type': 'error', 'message': 'I lost my train of thought. Try that again?'})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -232,7 +245,7 @@ async def transcribe(audio: UploadFile = File(...)):
     try:
         return {"text": await asyncio.to_thread(speech.transcribe, data)}
     except Exception as e:
-        print("Transcribe failed:", e)
+        diag.log(f"Voice transcription failed: {type(e).__name__}: {str(e)[:200]}")
         raise HTTPException(503, "Voice input isn't available right now.")
 
 
@@ -248,6 +261,34 @@ async def speak(body: Speak):
         print("Speak failed:", e)
         audio = None
     return Response(audio, media_type="audio/mpeg") if audio else Response(status_code=204)
+
+
+# ---- health check ----------------------------------------------------------------
+@app.get("/api/diag")
+async def health_check(test: bool = False):
+    now = datetime.now(Config().timezone)
+    out = {
+        "server time": now.strftime("%a %H:%M:%S"),
+        "running for": f"{int(time.time() - diag.state['started']) // 60} min",
+        "background read": (f"{int((now - _snapshot.taken).total_seconds())}s ago" if _snapshot else "not done yet"),
+        "sources": {r["label"]: f"{r['status']}: {r['log']}" for r in _snapshot.led.as_dict().values()} if _snapshot else {},
+        "Claude brief writer": "ready" if writer.ready_since else "starting",
+        "voice (speech-to-text)": speech.status(),
+        "last brief": diag.state.get("last_brief"),
+        "connected": accounts.connected(),
+    }
+    if test:
+        t = time.monotonic()
+        try:
+            reply = ""
+            async for ev in assistant.chat("Health check: reply with just the word OK."):
+                reply += ev.get("delta", "") if ev["type"] == "text" else ""
+            out["Claude chat test"] = f"{reply.strip()[:40]!r} in {time.monotonic() - t:.1f}s"
+        except Exception as e:
+            out["Claude chat test"] = f"FAILED after {time.monotonic() - t:.1f}s: {type(e).__name__}: {str(e)[:200]}"
+            await assistant.reset()
+    out["recent activity"] = diag.recent()[-40:]
+    return out
 
 
 # ---- push ------------------------------------------------------------------------

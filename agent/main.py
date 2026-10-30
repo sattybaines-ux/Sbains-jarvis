@@ -113,13 +113,16 @@ def collect(cfg: Config, demo: bool = False, quick: bool = False) -> Snapshot:
 
 
 def run(cfg: Config, demo: bool = False, publish: bool = True, quick: bool = False,
-        snapshot: "Snapshot | None" = None) -> dict:
+        snapshot: "Snapshot | None" = None, quick_writer=None) -> dict:
     """publish: write the encrypted GitHub Pages site. quick: the fast refresh used by the Jarvis server
     (one Claude call, no follow-up scan, no voice or Notion archive page)."""
     started = clock.monotonic()
 
+    timings = {}
+
     def timer(phase: str) -> None:  # timings only; logs are public
-        print(f"[{clock.monotonic() - started:5.1f}s] {phase}")
+        timings[phase] = round(clock.monotonic() - started, 1)
+        print(f"[{timings[phase]:5.1f}s] {phase}")
 
     tz = cfg.timezone
     now = datetime.now(tz)
@@ -170,7 +173,7 @@ def run(cfg: Config, demo: bool = False, publish: bool = True, quick: bool = Fal
         tri = fake_triage(events, emails)
     else:
         from .brain import Brain
-        brain = Brain(cfg.model, cfg.user_name, cfg.profile)
+        brain = Brain(cfg.model, cfg.user_name, cfg.profile, quick_writer)
         if quick:
             tri, quick_lines = brain.quick(today_label, data)
         else:
@@ -218,8 +221,8 @@ def run(cfg: Config, demo: bool = False, publish: bool = True, quick: bool = Fal
         "emailsScanned": len(emails) if mail_online else None,
         "needsReply": groups["needs_reply"] if mail_online else None,
         "draftsCreated": sum(d["created"] for d in drafts) if mail_online else None,
-        "fyi": groups["fyi"] if mail_online else None,
-        "ignored": groups["ignore"] if mail_online else None,
+        "fyi": groups["fyi"] if mail_online and not quick else None,  # a quick refresh only finds what needs you
+        "ignored": groups["ignore"] if mail_online and not quick else None,
         "tasksOpen": len(tasks) if led.online("notion") else None,
         "tasksDueToday": len([t for t in tasks if (t["due"] or "")[:10] == now.date().isoformat()])
         if led.online("notion") else None,
@@ -303,6 +306,7 @@ def run(cfg: Config, demo: bool = False, publish: bool = True, quick: bool = Fal
     }
 
     payload["connectors"] = led.as_dict()  # final statuses, including voice
+    payload["timings"] = timings
     if not publish:
         print(led.footer())
         return payload

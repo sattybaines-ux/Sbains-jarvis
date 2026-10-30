@@ -153,8 +153,9 @@ class Assistant:
             max_turns=12,
             cwd=self._workdir,
         )
-        self._client = ClaudeSDKClient(options)
-        await self._client.connect()
+        client = ClaudeSDKClient(options)
+        await asyncio.wait_for(client.connect(), 90)
+        self._client = client
 
     async def reset(self):
         async with self._lock:
@@ -166,7 +167,8 @@ class Assistant:
             self.pending.clear()
 
     async def chat(self, text: str, voice: bool = False) -> AsyncIterator[dict]:
-        async with self._lock:
+        # One question at a time; if Claude goes quiet for 2 minutes the turn is abandoned instead of hanging.
+        async with self._lock, asyncio.timeout(120):
             await self._ensure()
             now = datetime.now(Config().timezone).strftime("%A %B %-d, %Y %-I:%M %p")
             await self._client.query(f"[{now}] {text}" + (f"\n{VOICE_HINT}" if voice else ""))

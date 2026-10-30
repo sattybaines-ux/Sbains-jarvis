@@ -204,3 +204,6 @@ h1.greet em { font-style: italic; color: var(--muted); }
 .toggle { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card-solid); font-size: 14px; white-space: nowrap; }
 
 @media (prefers-reduced-motion: reduce) { .orb, .orb::before { animation: none !important; } }
+
+.diag { white-space: pre-wrap; word-break: break-word; font: 12px/1.45 ui-monospace, Menlo, monospace; color: var(--muted);
+        background: var(--bg-2); border-radius: 14px; padding: 12px; margin: 10px 0 0; max-height: 60vh; overflow: auto; }

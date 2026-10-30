@@ -7,14 +7,22 @@ from agent.config import Config
 
 _model = None
 _model_lock = threading.Lock()
+_status = "not loaded yet"
+
+
+def status() -> str:
+    return _status
 
 
 def _whisper():
-    global _model
+    global _model, _status
     with _model_lock:
         if _model is None:
             from faster_whisper import WhisperModel
-            _model = WhisperModel(os.environ.get("WHISPER_MODEL", "base.en"), device="cpu", compute_type="int8")
+            name = os.environ.get("WHISPER_MODEL", "base.en")
+            _status = f"loading {name}…"
+            _model = WhisperModel(name, device="cpu", compute_type="int8")
+            _status = f"ready ({name})"
         return _model
 
 
@@ -22,6 +30,8 @@ def warm_up() -> None:
     try:
         _whisper()
     except Exception as e:  # voice input is optional; typing still works
+        global _status
+        _status = f"not available: {type(e).__name__}: {str(e)[:150]}"
         print("Whisper not available:", e)
 
 
